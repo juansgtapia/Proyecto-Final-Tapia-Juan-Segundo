@@ -1,0 +1,1067 @@
+---
+title: "Analisis de factores socioeconomicos"
+author: "Juan Segundo Tapia"
+date: "2023-07-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, messagge = FALSE, warning = FALSE, error = FALSE)
+```
+
+# ANALISIS DE FACTORES SOCIO ECONOMICOS EN LA ECONOMIA MUNDIAL
+
+En este trabajo analizaremos ciertos factores economicos que tienen incidencia en la formas en las que las sociedades se desarrollan. ¿Existe una correlacion entre la democracia y la riqueza de un país? Lo analizaremos en este proyecto
+
+Comenzamos importando los datasets que utilizaremos.
+
+```{r LIBRERIAS , include = FALSE, eval = TRUE}
+library(tidyverse)
+library(ggplot2)
+library(maps)
+library(dplyr)
+library(plotly)
+library(DT)
+library(purrr)
+library(factoextra)
+library(NbClust)
+library(tidyr)
+library(imputeTS)
+library(imputeMissings)
+library(stats)
+library(data.table)
+library(caret)
+library(tidymodels)
+library(rpart.plot)
+library(class)
+library(e1071)
+library(caTools)
+library(MASS)
+library(class)
+tidymodels_prefer()
+
+```
+
+## PAISES RICOS VS DESARROLLADOS
+
+Hay muchas definiciones de riqueza, dependiendo la institucion, tendremos diferentes resultados. Una forma de medir la riqueza puede ser en base al PBI Per Capita (GDP Per Capita) que es la valuacion de los bienes y servicios producidos dentro de un país dividido la cantidad de habitantes. Podriamos decir que un pais es rico si tiene un PBI Per Capita mayor a \$20,000 dolares. La desventaja de este indicador es que no toma en cuenta la desigualdad, la educacion, la infraestructura ni la salud.
+
+Otro concepto interesante es el Indice de Desarrollo Humano (HDI), que toma en cuenta factores educativos, sociales y economicos. Utilizaremos la definicion consecuente a el indicador, donde los paises con un indice de 0 a 0.550 tienen un desarrollo bajo; medio para aquellos entre 0.550 y 0.700; un desarrollo alto para los paises comprendidos entre 0.700 y 0.800; y muy alto para aquellos que superen el 0.800.
+
+```{r HDI, include = TRUE, eval = TRUE}
+
+#Human development index dataset
+human_development_index_2021 <- read_csv("human_development_index.csv") %>%
+  rename(HDI = `Human Development Index`, Country = Entity) %>%
+  mutate(
+    Development_level = ifelse(HDI >= 0.800, "Muy alto", 
+                               ifelse(HDI >= 0.700 & HDI < 0.800, "Alto",
+                                      ifelse(HDI >= 0.550 & HDI < 0.700, "Medio",
+                                             ifelse(HDI < 0.550, "Bajo", NA)))),
+    Development_level = factor(Development_level, levels = c("Muy alto", "Alto", "Medio", "Bajo")) 
+  ) %>%
+    mutate(Country = recode(Country, 
+                          "United States" = "USA",
+                          "United Kingdom" = "UK",
+                          "Czechia" = "Czech Republic",
+                          "Central African Republic" = "Central African Republic",
+                          "Congo" = "Republic of Congo",
+                          "Cote d'Ivoire" = "Ivory Coast")) %>%
+    filter(Year == 2021 ) %>% 
+    filter(!Country %in% c("Very high human development (UNDP)", "World",
+                        "Medium human development (UNDP)", "Low human development (UNDP)",
+                        "Latin America and the Caribbean (UNDP)", "High human development (UNDP)",
+                        "Europe and Central Asia (UNDP)", "East Asia and the Pacific (UNDP)",
+                        "Arab States (UNDP)")) 
+  
+
+# Obtengo mapa
+world_map <- map_data("world")
+
+# Combino los datos mediante un left_join()
+hdi_map_2021 <- left_join(world_map, human_development_index_2021, by = c("region" = "Country"))
+
+```
+
+### Paises más desarrollados
+
+Información del 2021
+
+```{r HDI_MAPA, include = TRUE, eval = TRUE}
+
+library(ggplot2)
+
+ggplot() + 
+  geom_map(data = hdi_map_2021, map = hdi_map_2021, aes(x = long, y = lat, map_id = region, fill = Development_level), color = "gray") + 
+  scale_fill_manual(values = c("Bajo" = "red", "Medio" = "orange", "Alto" = "lightgreen", "Muy alto" = "darkblue"), na.value = "white") +
+  theme_void()
+
+```
+
+Existen `sum(human_development_index_2021$Development_level == "Muy alto")` paises con un Índice de Desarrollo Humano Muy alto, los cuales podriamos considerar paises desarrollados.
+
+### Paises más ricos
+
+Estos son los paises con un PBI Per Capita superior a los \$20,000 dolares anuales.
+
+```{r PBI Per Capita, include = TRUE, eval = TRUE}
+
+gdp_per_capita_2018 <- read_csv("gdp-per-capita-maddison.csv") %>%
+  select(-`417485-annotations`) %>%
+  rename(Country = Entity) %>%
+  filter(Year == 2018, `GDP per capita` > 20000.00) %>%
+  filter(!Country %in% c("Western Offshoots (MPD)", "Western Europe (MPD)",
+                        "Eastern Europe (MPD)")) %>%
+  mutate(Country = recode(Country, "United States" = "USA",
+                          "United Kingdom" = "UK"))
+
+world_map <- map_data("world")
+
+gdp_per_capita_map <- left_join(world_map, gdp_per_capita_2018, by = c("region" = "Country"))
+
+```
+
+```{r Mapa PBI Per Capita, include = TRUE, eval = TRUE}
+
+library(ggplot2)
+
+ggplot() + 
+  geom_map(data = gdp_per_capita_map, map = gdp_per_capita_map, aes(x = long, y = lat, map_id = region, fill = `GDP per capita` )) + scale_fill_gradient(low = "lightblue", high = "darkblue") + theme_void()
+
+```
+
+Existen `nrow(gdp_per_capita_2018)` paises con un PBI Per Capita superior a \$20,000 dolares anuales, a los cuales podemos llamar países ricos
+
+## DEMOCRACIA Y RIQUEZA, ¿CÓMO SE RELACIONAN?
+
+Se ha impuesto en el mundo occidental un modelo de desarrollo que combina las instituciones democraticas un desarrollo economico estable, basado en el comercio global, y apertura economica.
+
+### Paises más democraticos
+
+```{r Democracia, include = TRUE, eval = TRUE}
+
+#Importo el dataset
+democracy_index_2022_1 <- read_csv("electoral-democracy-index.csv") %>%
+  select(-electdem_vdem_low_owid, -electdem_vdem_high_owid) %>%
+  rename(Country = Entity, Democracy_index = electdem_vdem_owid) %>%
+  filter(Year == 2022) %>%
+  mutate(Country = recode(Country,
+                          "United States" = "USA",
+                          "United Kingdom" = "UK",
+                          "Czechia" = "Czech Republic",
+                          "Central African Republic" = "Central African Republic",
+                          "Congo" = "Republic of Congo",
+                          "Cote d'Ivoire" = "Ivory Coast")) %>%
+  filter(!Country %in% c("World", "South America",
+                        "North America", "Europe",
+                        "Asia", "Africa"))
+
+#Genero el gráfico
+world_map <- map_data("world")
+
+democracy_index_2022 <- left_join(world_map, democracy_index_2022_1, by = c("region" = "Country"))
+
+```
+
+```{r Tabla de índice de democracia, include = TRUE, eval = TRUE}
+
+datatable(democracy_index_2022_1)
+
+```
+
+```{r Mapa índice de Democracia, include = TRUE, eval = TRUE}
+
+library(ggplot2)
+
+ggplot() + 
+  geom_map(data = democracy_index_2022, map = democracy_index_2022, aes(x = long, y = lat, map_id = region, fill = Democracy_index)) + 
+  scale_fill_gradientn(colors = c("red", "orange", "darkblue"), values = c(0, 0.5, 1)) + 
+  theme_void()
+
+```
+
+### Relacion entre el nivel de desarrollo y el coeficiente de democracia
+
+```{r Democracia y Desarrollo , include = TRUE, eval = TRUE}
+
+data_pbi <- read_csv("gdp-per-capita-maddison.csv") %>%
+  filter(Year >= 1900 & Year <= 2018) %>%
+  select (-`417485-annotations`, -Entity) %>%
+  filter(!is.na(Code))
+
+data_democracia <- read_csv("electoral-democracy-index.csv") %>%
+  select(-electdem_vdem_low_owid, -electdem_vdem_high_owid, -Entity) %>%
+  rename(Democracy_index = electdem_vdem_owid) %>%
+  filter(Year >= 1900 & Year <= 2018) %>%
+  filter(!is.na(Code))
+
+democracy_gdp <- inner_join(data_democracia, data_pbi, by = c("Year","Code"))
+
+```
+
+```{r Grafico de Democracia y Desarrollo , include = TRUE, eval = TRUE}
+
+library(ggplot2)
+
+# Generacion del grafico
+ggplot(democracy_gdp, aes(x = Democracy_index, y = log(`GDP per capita`))) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(x = "Índice de democracia", y = "Log(PBI per capita)") +
+  ggtitle("Correlación entre el índice de democracia y el logaritmo del PBI Per Capita entre los años 1900 y 2018") +
+  coord_cartesian(xlim = c(0, max(democracy_gdp$Democracy_index))) +
+  theme(plot.title = element_text(hjust = 0.5, size = rel(0.75)))
+
+
+```
+
+Vemos que no se puede sacar una clara conclusion de la inforamcion dada, esto puede tener muchos motivos: informacion sesgada, incompleta, o que simplemente no es una variable completamente relevante. En todo caso, el indice de correlacion es `cor(democracy_gdp$Democracy_index, log(democracy_gdp$`GDP per capita`))`
+
+## DESIGUALDAD: ¿Cómo se distribuye la riqueza?
+
+Como hemos visto, un pbi per capita alto no necesariamente índica un cierto nivel de desarrollo, aunque evidentemente hay cierta relación. Otro factor interesante para analizar respecto a los países es como se distribuye la riqueza.
+
+```{r desigualdad 2021}
+
+inequality <- read_csv("inequality.csv") %>%
+  rename(Country = Entity)
+
+gini2021 <- inequality %>%
+  filter(Year == 2021) %>%
+  summarise(total_na = sum(is.na(`Gini coefficient`)))
+
+print(paste("Existen", gini2021$total_na, "registros NA para el año 2021"))
+
+#Vemos que existen muchos registros NA para el año 2021, podriamos analizar el coeficiente de gini para cada pais en base al último valor disponible para cada pais, desde el 2010.
+
+gini <- inequality %>%
+  filter(Year >=2010 & Year <= 2022) %>% 
+  group_by(Country) %>%
+  filter(!is.na(`Gini coefficient`)) %>%
+  filter(!is.na(Code)) %>%
+  slice_max(order_by = Year)
+
+
+print(paste("Existen", nrow(gini), "registros de coeficiente gini entre los años", min(gini$Year), "y", max(gini$Year)))
+
+```
+
+### Tabla: Indice de desigualdad
+
+```{r desigualdad }
+
+datatable(gini, rownames =FALSE)
+
+
+```
+
+### Tabla: desigualdad por año
+
+Muestra el coeficiente gini promedio en el mundo entre los años 20000 y 2022
+
+```{r desigualdad por año}
+
+datatable(
+inequality %>%
+  filter(Year >=2000 & Year <= 2022) %>% 
+  group_by(Country) %>%
+  filter(!is.na(`Gini coefficient`)) %>%
+  group_by(Year) %>%
+  summarize(
+    "Average Gini coefficient" = mean(`Gini coefficient`)), rownames = FALSE)
+
+
+```
+
+Se puede apreciar que en los últimos 22 años ha habido una tendencia a la suba de la desigualdad.
+
+# ANALISIS DE DATOS:
+
+¿Cómo se clasifican los paises en base a sus estadisticas? Tomemos en cuenta los siguientes factores centrales, algunos de los cuales hemos cubrido anteriormente: el PBI Per Capita, el índice de democracia, la desigualdad medida a traves del coeficiente gini, la expectativa de vida y la mortalidad infantil. Para obtener informacion relativamente reciente, y ampliar nuestro dataset, utilizaremos la informacion más reciente de cada país a partir del año 2015.
+
+```{r junto los datasets}
+
+#GDP PP Per Capita dataset dataset ----
+gdp_per_capita_PPP_db <- read_csv("gdp-per-capita-worldbank.csv") %>%
+  filter(Year >= 2015 & Year <= 2022 & Code !="NA" & Code != "OWID_WRL") %>%
+  rename(`GDP Per Capita PPP` = `GDP per capita, PPP (constant 2017 international $)`) %>%
+  filter(!is.na(`GDP Per Capita PPP`)) %>%
+  slice_max(order_by = Year) %>%
+  select(`Code`, `GDP Per Capita PPP`) 
+
+#Democracy Index dataset ----
+democracy_index_db <- read_csv("electoral-democracy-index.csv") %>%
+  filter(Year >= 2015 & Year <= 2022 & Code !="NA" & Code !="OWID_WRL") %>%
+  rename(`Democracy index` = electdem_vdem_owid) %>%
+  filter(!is.na(Year)) %>%
+  slice_max(order_by = Year) %>%
+  select(`Code`,`Democracy index`)
+
+#Life expectancy dataset ----
+life_expectancy_db <- read_csv("life-expectancy.csv") %>%
+  filter(Year >= 2015 & Year <= 2022 & Code !="NA" & Code != "OWID_WRL") %>%
+  rename(`Life expectancy` = `Life expectancy at birth (historical)`) %>%
+  filter(!is.na(`Life expectancy`)) %>%
+  slice_max(order_by = Year) %>%
+  select(`Code`,`Life expectancy`)
+
+#Child mortality dataset ----
+child_mortality_db <- read_csv("child-mortality.csv") %>%
+  filter(Year >= 2015 & Year <= 2022 & Code != "NA" & Code != "OWID_WRL") %>%
+  rename(`Child mortality` = `Mortality rate, under-5 (per 1,000 live births)`) %>%
+  filter(!is.na(`Child mortality`)) %>%
+  slice_max(order_by = Year) %>%
+  select(`Code`, `Child mortality`)
+
+#Inequality dataset ----
+inequality_db <- read_csv("inequality.csv") %>%
+  filter(Year >= 2015 & Year <= 2022 & Code != "NA" & Code != "OWID_WRL") %>%
+  filter(!is.na(`Gini coefficient`)) %>%
+  group_by(Code) %>%
+  slice_max(order_by = Year) %>%
+  ungroup() %>%
+  select(Code, `Gini coefficient`)
+
+
+#Human development index dataset ----
+human_development_index_db <- read_csv("human_development_index.csv") %>%
+  rename(HDI = `Human Development Index`) %>%
+  mutate(
+    `Nivel de desarrollo` = ifelse(HDI >= 0.800, "Muy alto", 
+                               ifelse(HDI >= 0.700 & HDI < 0.800, "Alto",
+                                      ifelse(HDI >= 0.550 & HDI < 0.700, "Medio",
+                                             ifelse(HDI < 0.550, "Bajo", NA)))),
+    `Nivel de desarrollo` = factor(`Nivel de desarrollo`, levels = c("Muy alto", "Alto", "Medio", "Bajo"))) %>%
+  filter(Year >= 2015 & Year <=2022 & Code !="NA" & Code != "OWID_WRL") %>%
+  filter(!is.na(HDI)) %>%
+  slice_max(order_by = Year) %>%
+  select(-Entity, -Year)
+
+
+#Dataset de analisis original ----
+countries_information <- left_join(gdp_per_capita_PPP_db, democracy_index_db, by ="Code") %>%
+  left_join(., life_expectancy_db, by = "Code") %>%
+  left_join(., child_mortality_db, by = "Code") %>%
+  left_join(., inequality_db, by = "Code") %>%
+  left_join(., human_development_index_db, by = "Code") %>%
+  mutate(Code = as.character(Code), .before = 1) %>%
+  column_to_rownames(var = "Code") #Convierto a la variabe Code en rowname
+
+#Dataset de analisis ----
+countries_data <- countries_information %>%
+  select(-HDI, -`Nivel de desarrollo`)
+
+
+
+```
+
+## ANALISIS DE CLUSTERS
+
+### Imputación de la información
+
+```{r Imputacion }
+
+# 1 IMPUTACION
+
+
+#Identifico las columnas
+registros_na <- colnames(countries_data)[apply(is.na(countries_data), 2, any)]
+
+
+# Imputo los valores faltantes
+
+imputed_data <- na.omit(countries_data)
+countries_info <- imputeMissings::impute(data.frame(imputed_data))
+
+
+# 2 NORMALIZACION ----
+
+normalized_data <- scale(countries_info)
+
+
+# 3 CALCULO MATRIZ DE DISTANCIAS ----
+
+distancias <- get_dist(normalized_data, method ="euclidean")
+```
+
+#### Gráfico 1: Matriz de distancias
+
+```{r Grafica matriz de distancias}
+
+fviz_dist(distancias, gradient = list(low = "blue", mid = "white", high = "red"))
+
+```
+
+### Estimación de número de clusters
+
+#### 1) Elbow Method
+
+```{r Elbow Method}
+#Elbow method
+fviz_nbclust(normalized_data, kmeans, method = "wss")
+```
+
+Obtenemos una curva marginal decreciente a partir del cluser numero 3. Por lo cual podemos estimar que el número óptimo de clusters está entre 2 y 3.
+
+#### 2) Silhoutte Method
+
+```{r Silhoutte Method}
+#silhoutte method
+fviz_nbclust(normalized_data, kmeans, method = "silhouette")
+```
+
+Segun este método el número óptimo de clusters es 2.
+
+#### 3) Gap Stat Method
+
+```{r gap_stat method}
+
+#gap_stat method
+fviz_nbclust(normalized_data, kmeans, method = "gap_stat")
+
+```
+
+De acerdo este método, el número óptimo de clusters es 4. #Parece que el numero optimo de clusters esta entre 2 y 3, pero podemos utilizar una funcion que evalua muchos metodos para poder tomar el optimo numero de clusters
+
+#### 4) Multiples métodos
+
+```{r NbClust}
+
+resultado_clust <- NbClust(normalized_data, distance = "euclidean", min.nc=2, max.nc= 6, method = "kmeans", index = "alllong")
+
+```
+
+Como hemos visto, la cantidad optima de clusters es de 3 porque la mayoría de métodos coinciden en ese numero. Por este motivo, aplicaremos 3 como el numero de clusters.
+
+## K-MEANS
+
+```{r analisis de clusters}
+
+#Aplico k means con 3 clusters
+k3 <- kmeans(normalized_data, centers = 3, nstart = 30) #Comenzamos con 30 registros
+
+```
+
+### Grafico 1: Cluster Plot
+
+```{r Cluster Grafico 1}
+
+fviz_cluster(k3, data = normalized_data)
+
+```
+
+En esta gráfica vemos los registros agrupados en 3 clusters que responden a caracteristicas propias. El limite de cada region es el punto máxima distancia al centro, sin estar a menor distancia que otro cluster.
+
+### Gráfico 2: Cluster Plot y sus componentes principales
+
+```{r Cluster Grafico 2 }
+
+fviz_cluster(k3, data = normalized_data, ellipse.type = "euclid", repel = TRUE, star.plot = TRUE)
+
+```
+
+En este caso, vemos como el primer componente explica las variaciones respecto a su media. Podemos distinguir claramente que el cluster 1 se agrupa a la izquierda del eje de las abscisas, siendo su media menor a la variacion explicada por el componente 1. Esto quiere decir que el componente 1 es menos efectivo a la hora de explicar las variaciones en sus registros. Con el cluster numero 2 sucede exactamente lo opuesto, en cambio el tercero es un cluster que responde a la media de las variaciones explicada en sus registros. El mismo analisis para el eje de las ordenadas (componente 2) no esta tan clara su relacion ya que los tres clusters se desparraman tanto sobre el eje positivo como por su negativo respecto a su media.
+
+### Gráfico 3: Centroides
+
+```{r Cluster Grafico 3}
+fviz_cluster(k3, data = normalized_data, ellipse.type = "norm")
+```
+
+En este caso, obtenemos un gráfico más claro respecto a los centroides más claramente, esto surge de la suma de los valores de cada registro correspondiente del centroide dividido el numero total de puntos en ese cluster (grupo).
+
+### Gráfico 4: Centroide y sus puntos
+
+```{r Cluster Grafico 4}
+fviz_cluster(k3, data = normalized_data, ellipse.type = "norm", palette = "Set2", ggtheme = )
+
+```
+
+En este caso combinamos ambos gráficos, vemos cada centroide y sus registros asociados.
+
+### Gráfico 5: Dendograma
+
+```{r Dendograma }
+res3 <- hcut(normalized_data, k = 3, stand = TRUE)
+fviz_dend(res3, rect = TRUE, cex = 0.5,
+          k_colors = c("red","#2E9FDF", "green"))
+
+```
+
+Visualizamos la misma informacion pero en formato de dendograma. Cada color representa un cluster diferente, y sus ramificaciones hasta llegar al registro.
+
+## CARACTERISTICAS DE LOS CLUSTERS
+
+### Cluster Summary
+
+```{r Cluster Summary}
+#Medias de cada cluster (sin estandarizar)
+cluster_summary <- countries_info %>%
+  mutate(Cluster = k3$cluster) %>%
+  group_by(Cluster) %>%
+  summarize_all("mean")
+datatable(cluster_summary, rownames = FALSE)
+
+```
+
+En esta tabla se presenta el valor promedio ("mean") de cada variable agrupada según su cluster, sin normalizar. Para el cluster 1 obtenemos que el PBI Per Capita PPP es en promedio de \$4140, lo cual indica de naciones muy pobres; además su expectativa de vida es muy baja, de apenas 60 años; su mortalidad infantil es muy alta a comparación del resto; El Indice de Democracia es sensiblemente inferior, indicando un alto nivel de autoritarismo en dichos paises, además de su mayor desigualdad reflejada a travez de su mayor Coeficiente de Gini. Podemos inferir que los paises agrupados en el Cluster 1 son paises pobres y muy poco desarrollados. Continuando el analisis también inferiremos que los países del cluster 2 son países altamente desarrollados, mientras que aquellos del cluster 3 poseen un desarrollo intermedio, más cercano a aquellos desarrollados.
+
+### Registros pertenecientes a cada cluster
+
+#### Sin Estandarizar:
+
+```{r Paises según su cluster, sin estandarizar }
+#Agrego el cluster al dataset de analisis - ahora se que pais pertenece a cada cluster
+
+countries_cluster_info <- countries_info %>%
+  mutate(Cluster = as.factor(k3$cluster))
+datatable(countries_cluster_info)
+```
+
+Podemos observar de forma interactiva que paises del dataset pertenecen a cada Cluster, sin estandarizar
+
+#### Estandarizado:
+
+```{r Paises según su cluster, estandarizado}
+#Visualizo la misma informacion pero en base a sus valores estandarizados
+
+normalized_data_db <- as.data.frame(normalized_data)
+
+countries_cluster_standarized_info <- normalized_data_db %>%
+  mutate(Cluster = as.factor(k3$cluster))
+datatable(countries_cluster_standarized_info)
+```
+
+En este caso el análisis no se hace respecto a sus números brutos o absolutos, si no en base a su diferencia respecto a la media, por eso, estamos trabajando con un dataset estandarizado. En el caso de países como Austria, vemos que los registros para sus variables son superiores a la media, excepto en la mortalidad infantil, el cual es inferior a la media. Por eso mismo, podemos ir observando que los registros o paises cuyos valores superen por cierto margen considerable la media, y sean muy inferiores en mortandad infantil, pertenecen al cluster 2; que son los paises más desarrollados. En el caso del cluster 1, es la lógica inversa; los pertenecientes al cluster 3, estan dispersos con valores cercanos a la media.
+
+### Graficos
+
+#### Grafica Caracteristica del Cluster 1
+
+```{r Grafica caracteristica 1 }
+#Visualizo la informacion de una manera diferente
+
+countries_cluster_standarized_info$Cluster <- factor(countries_cluster_standarized_info$Cluster)
+
+
+countries_long <- gather(countries_cluster_standarized_info, caracteristica, valor,GDP.Per.Capita.PPP:Gini.coefficient, factor_key = TRUE)
+
+ggplot(countries_long, aes(as.factor(x = caracteristica), y = valor, group = Cluster, colour = Cluster)) + stat_summary(fun = mean, geom = "pointrange", size = 1) + stat_summary(geom="line") + geom_point(aes(shape = Cluster))
+
+```
+
+Este es un gráfico muy interesante, vemos las variables en el eje de las abscisas y en el eje de las ordenadas el valor promedio de cada cluster (diferenciado por color) para cada variable, además de sus registros correspondientes.
+
+#### Grafica Caracteristica del Cluster 2
+
+```{r Grafica caracteristica 2}
+
+#Si elimino una de las lineas, obtengo la misma informacion pero para las medias, sin marcar cada punto
+
+ggplot(countries_long, aes(as.factor(x = caracteristica), y = valor, group = Cluster, colour = Cluster)) + stat_summary(fun = mean, geom = "pointrange", size = 1) + stat_summary(geom="line")
+
+```
+
+Aquí vemos la misma gráfica pero respecto sin los registros correspondientes a cada cluster.
+
+En este analisis de Cluster hemos analizado y demostrado que los paises agrupados en el cluster 2 tienen un nivel de desarrollo mayor, esto es: presentan un PBI Per Capita PPP (Ajustado a la inflacion y poder adquisitivo), nivel de democracia y expectativa de vida superiores a la media. En cuanto a las dos metricas restantes, presentan una mortalidad infantil y un coeficiente de gini menor a la media (A menor coeficiente Gini, menos desigual es una sociedad). En el caso de los paises en el cluster 3, son paises que se mantienen en un rango cercano a la media. Su caracteristica mas remarcable es que tienen una expectativa de vida superior a la media, y una mortalidad infantil menor a la media, similar a la de los paises más desarrollados. Sin embargo, a estos paises flaquean en su distribucion del ingreso. Para los paises agrupados en el cluster 1, es muy remarcado su alta mortalidad infantil y su baja expectativa de vida, ademas de tener peores indicadores que el resto de grupos en su media. En este caso. Es probable que estemos hablando de paises que estan atravesados por la pobreza extrema.
+
+# ANALISIS DE COMPONENTES PRINCIPALES
+
+```{r componentes principales }
+
+#Utilizo mi base de datos original countries_info
+
+
+#PCA sobre el dataset 
+respca <- prcomp(countries_info, scale = TRUE)
+
+#Veo los nombres de los componentes
+
+#componentes_name <- names(respca)
+
+#Me indica cuantos componentes diferentes tengo
+
+#nro_componentes <- dim(respca$rotation)
+
+#Peso de cada componente para cada una de las variables
+datatable(respca$rotation)
+
+```
+
+Las variables GDP Per Capita PPP y Life Expectancy tienen una fuerte influencia en el primer componene. Sin embargo, para el segundo componente, ambas variables tienen un peso muy bajo. En el segundo componente, las variables de mayor influencia son el íncide de Democracia y el coeficiente Gini.
+
+## PCA ANALISIS
+
+```{r PCA Summary}
+
+# Desviaciones estandar para cada componente
+
+#respca$sdev
+
+# Varianza explicada por cada componente
+
+#respca$sdev^2
+
+#Importancia de los componentes
+
+summary(respca)
+
+```
+
+El primer componente explica un 64,14% de la variación, mientras que el segundo componente un 17,04%. Así continua descendientemente hasta que la varianza acumulada por los 5 componentes es del 100%. Podemos ver que entre los dos primeros componentes, se explica un 81,18% de la varianza.
+
+### Gráficos
+
+Veremos cual es la relacion entre los componentes, los registros y las variables.
+
+#### Gráfico 1: Variacion explicada por cada componente
+
+```{r Grafico 1 PCA }
+
+# Screeplot - Porcentaje de la variacion explicada por cada componente
+fviz_screeplot(respca)
+
+
+
+```
+
+Como hemos visto en la tabla previa, el primer componente explica más del 60% de la varianza, y el segundo un poco menos del 20%.
+
+#### Gráfico 2: Relacion entre los componentes 1 y 2 con las variables
+
+```{r Grafico 2 PCA }
+
+fviz_pca_var(respca,
+             repel = TRUE) #Representacion de las variables sobre los componentes proncipales
+
+```
+
+De forma analóga a como hemos analizado previamente, el primer componente explica muy bien las variaciones en el índice de democracia, PBI Per Capita PPP y la expectativa de vida, mientras que lo hace muy mal la mortalidad infantil y el coeficiente de desigualdad. En este último parametro, el segundo componente explica muy bien sus variaciones.
+
+#### Gráfico 3: Contribucion de las variables a el componente 1
+
+```{r Grafico 3 PCA}
+
+#Cuanto contribuyen las variables a la varianza explicada
+fviz_contrib(respca, choice = "var")
+
+```
+
+Este gráfico representa otro nivel de analisis, que hace foco en tanto en cuanto peso tienen las variables en el primer componente.
+
+#### Gráfico 4: Relacion entre los componentes 1 y 2 con los registros
+
+```{r Grafico 4 PCA}
+
+#Cosenos al cuadrado - 
+fviz_pca_ind(respca,
+             col.ind = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE)
+
+```
+
+En esta gráfica observamos cuanto explican los registros los componentes primero y segundo. En el caso del registro de Luxermburgo (LUX) el primer componente explica su variacion de manera muy satisfactoria, mientras que el segundo componente no lo hace tan bien. Opuesto es el caso de Namibia (NAM).
+
+#### Gráfico 5: Contribucion de los registros al componente 1
+
+```{r Grafico 5 PCA}
+
+#Cuanto contribuyen los registros a la variancion explicada
+fviz_contrib(respca, choice = "ind",
+             repel = TRUE)
+
+
+```
+
+Enfoque similar al tercer gráfico, pero esta vez sobre los regisros. El país que más aporta a la componente primera es Luxemburgo (LUX), casi un 4%. Mientras que Vanuatu (VAT) es el registro que menos aporta.
+
+#### Gráfico 6: Relacion entre los componentes 1 y 2 con las variables y registros.
+
+```{r Grafico 6 PCA}
+
+#Combinamos el componente primero y segundo conjuntamente con las variables y los registros.
+fviz_pca_biplot(respca,
+                col.var = "#FC4E07",
+                col.ind = "#00AFBB",
+                repel = TRUE)
+
+```
+
+Este es el gráfico combina todo lo que hemos visto hasta ahora. Es un plano cartesiano que en el eje de las abcisas contiene varianza explicada (normalizada) de la primer componente, mientras que en el eje de las ordenadas contiene la varianza explicada (y normalizada) del segundo componente. Las flechas naranjas indican la direccion que toman las variables (tomando en cuenta todos los registros) en cuanto a su relacion con el componente 1 y 2. Los puntos azules en cambio, representan el lugar donde descansan los registros en base a sus valores.
+
+Como hemos dicho previamente, el primer componente explica muy bien las variaciones en el Indice de Democracia, el PBI Per Capita PPP, y la expectativa de vida a diferencia del Coeficiente Gini y la Mortalidad Infantil. El segundo componente explica moderadamente mal la mortalidad infantil aunque no lo hace tan mal para el Indice de Democracia. Los registros que se encuentran cerca del centro (como BTN, SLV, GEO, TUR) son paises cuyas variaciones son explicadas cerca del 64,1% por el componente primero y 17% por el componente segundo. A medida que nos alejamos del centro, esas diferencias van variando.
+
+## CORRELACIONES
+
+```{r Correlaciones}
+
+xx <- respca$x #Creo una matriz
+xx <- as.data.frame(xx) #lo convierto a dataframe
+
+countries_data_correlations <- countries_info %>%
+  mutate(PC1 = xx$PC1, PC2 = xx$PC2)#Agrego el primer y segundo componente al dataset de analisis
+
+
+#Busco la correlacion
+
+correlaciones <- cor(countries_data_correlations)
+
+
+```
+
+### Tabla de correlación
+
+```{r Tabla de correlaciones}
+
+datatable(correlaciones)
+
+
+```
+
+Para concluir el analisis, vemos quqe existe una correlación lineal muy importante entre el PBI Per Capita PPP y la Expectativa de Vida. Concretamente es de un 77,31%, seguidamente por el Índice de Democracia, y existe una correlacion indirecta (como es de esperar) con la mortalidad infantil. Es interesante el caso de el coeficiente Gini, que tiene una correlacion negativa. A mayor PBI Per Capita PPP, menor índice de Gini, aunque esta correlacion no sea muy fuerte (38,02%) esta existe; lo cual nos lleva a pensar que a mayor riqueza, la distribución del ingreso tiende a ser menor. Continuando, notamos que el componente 1 tiene una fuerte correlación con el PBI Per Capita PPP, mientras que el componente segundo lo tiene a su vez con el Coeficiente
+
+# APRENDIZAJE SUPERVISADO
+
+En esta seccion aplicaremos un analisis de aprendizaje supervisado a nuestra base de datos. Primero comenzaremos con un analisis de KNN, optimizando mediante la tecnica de K-Fold Cross Validation y luego ampliaremos hacía el analisis de regresion y clasificacion (CART) KNN Neighbors Es una técnica de machine learning supervisado de clasificación. Es un algoritmo no-parametrico, lo que indica que no hace supuestos sobre la distribucion estadistica de la informacion. El valor K determina la cantidad de "vecinos" mas cercanos al punto (distancia euclediana) o valores utilizados para decir a que categoria pertenece cada observacion.
+
+## CLASIFICACION
+
+Utilizaremos el dataset countries_information ya que posee los registros de los datos seleccionados para todos los paises, y 4 variables categoricas en forma de factor (Nivel de desarrollo). Para evitar que el coeficiente de desarrollo humano tenga una ingerencia tan grande (dado que define el nivel de desarrollo) eliminaremos dicha variable del analisis y nos centraremos en algunos de los factores que hacen a este coeficiente, dado que no tenemos el peso que toma cada variable en especifico ni todas las variables que hacen al coeficiente, no buscamos resultados exactos.
+
+```{r K-Fold}
+
+# Eliminamos registros sin nivel de desarrollo
+countries_information_knn1 <- countries_information %>%
+  select(-HDI) %>%
+  na.omit()
+
+#Separo la data del dataset
+split <- sample.split(countries_information_knn1, SplitRatio = 0.7)
+
+#Creo los datasets de entrenamiento y testing 
+training_data <- subset(countries_information_knn1, split == "TRUE")
+testing_data <- subset(countries_information_knn1, split == "FALSE")
+
+#Normalizo las variables
+training_data_scale <- scale(training_data[, 1:5])
+testing_data_scale <- scale(testing_data[, 1:5])
+
+#Itero para distintos K, entre 3 y 15
+k <- c(3:15)
+
+knn_results <- purrr::map_dfr(
+  .x = k, #Numero de K que intero
+  .f = function(x) { #Funcion que itera a los distintos
+    classifier_knn <- knn(
+      train = training_data_scale,
+      test = testing_data_scale,
+      cl = training_data$`Nivel de desarrollo`,
+      k = x
+    )
+    
+    tibble(
+      k = x,
+      Accuracy = (1 - mean(classifier_knn != testing_data$`Nivel de desarrollo`))
+    )
+  }
+)
+
+
+knn_results_plot <- knn_results %>%
+  ggplot(aes(x = reorder(k, Accuracy, desc), y = Accuracy)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.05), labels = scales::percent_format(accuracy = 1)) +
+  geom_col(fill = "blue", colour = "grey", alpha = 0.8) +
+  xlab("K vecinos") +
+  theme_bw()
+
+knn_results_plot
+  
+
+```
+
+Como hemos visualizado, la presición máxima es utilizando K=11, y posteriormente 4, a un nivel similar. Procederemos a clasificar la informacion con un K=11
+
+### Tabla de confusion
+
+```{r KNN classifier}
+
+#Corro el algoritmo KNN para K = 3
+knn_class <- knn(
+  train = training_data_scale,
+  test = testing_data_scale,
+  cl = training_data$`Nivel de desarrollo`,
+  k = 11
+)
+
+#Corro la matriz de confusion
+
+clk <- table(testing_data$`Nivel de desarrollo`, knn_class)
+clk
+
+```
+
+Hemos obtenido la prediccion de la informacion en el subdataset de testing en base al analisis KNN que hemos hecho con nuestra informacion para entrenamineto.
+
+Observamos que la clasificacion no siempre fue correcta. En los casos un IDH muy alto, la clasificacion fue correcta en 14 de 17 casos. Para los paises con un IDH alto, la clasificacion fue correcta 7 de 9 ocasiones. Los paises con un desarrollo medio fue correcta en 3 ocaciones de 6, y para los paises con un desarrollo bajo fue correcta en 5 de 7 casos.
+
+## ANALISIS DE REGRESION
+
+Otro modelo predictivo es el analis de regresión. Mediante este método tratamos de predecir el cambio en los valores de cierta variable en base a los datos disponibles de una o más variables. Podemos obtener relaciones directas (a medida que aumenta una variable, aumenta la otra), indirectas, o que la relación no esté tan clara u no sea tan fuerte.
+
+En un analisis sencillo, podemos predecir el precio de un departamento en Boston en base a la informacion disponible en cuanto a los precios y superficies de los departamentos en venta. Este analisis es extrapolable a otros analisis de corte económico, como la conocida Curva de Phillips, donde encontramos un trade-off entre desempleo e inflacion (en su version original de los años 50, esta ha evolucionado e incluido otros aspectos como la inflacion esperada, la productividad, la inflacion precedente, tasa real de crecimiento del dinero, etc).
+
+### Modelo 1: Training
+
+Aplicamos nuestro primer modelo, que luego iremos mejorando.
+
+```{r analisis de regesion modelo 1}
+
+#Separo la info entre training y testing
+
+reg_db <- createDataPartition(countries_information_knn1$`GDP Per Capita PPP`, p = 0.8, list = FALSE)
+training_db1 <- countries_information_knn1[reg_db,]
+testing_db1 <- countries_information_knn1[-reg_db,]
+
+training_db1_sc <- scale(training_db1[, 1:5])
+testing_db1_sc <- scale(testing_db1[, 1:5])
+
+#Modelo 
+gdp_model <- train(
+  `GDP Per Capita PPP` ~ ., #Variable de interes
+  data = training_db1_sc, #Dataset de entrenamiento
+  method = "knn",  #Metodo de machine learning
+  )
+
+gdp_model
+
+
+```
+
+Analicemos este resultado: El número óptimode K vecinos es 9.
+
+El RMSE (error cuadratico medio), la desviación estandar de la varianza inexplicada. La interpretacion que podemos hacer de este indicador es que las predicciones de el modelo tienen en promedio una diferencia de aproximadamente 0.5368143 unidades respecto a los valores reales en la escala de los datos normalizados. Podemos afirmar que existe una baja discrepancia. Además, es una buena presición ya que un error cuadratico medio de 0.5287237 es razonable para un dataset con datos tan dispares para paises con diferentes métricas y diferencias entre ellas mismas.
+
+El R-Squared es el índice de correlación, y nos indica ya que nos índica que un 74.75% de la variabilidad en la variable dependiente (GDP PPP) es explicada por las variable independientes del modelo (es decir, el resto de métricas).
+
+El último índicador es el MAE (Error absoluto medio), este mide la distancia vertical promedio entre cada punto y la prediccion por el modelo de regresión. La diferencia entre este indicador y el RMSE es que este último calcula la raiz cuadrada del promedio de los errores cuadrados entre las predicciones y valores reales (este penaliza mas los errores), mientras qu el MAE calcula el promedio de las diferencias absolutas entre las predicciones y los valores reales, es decir, la distancia vertical promedio entre la recta de regresion (prediccion) y los registros verdaderos (puntos). Un MAE de 0.3466774 indica que la distancia vertical es de 0.3466774 en promedio entre la recta de regresion y los valores actuales. Es un valor correcto, dependiendo el contexto y la precisión que busquemos, y ciertamente indica una correlacion (que efectivamente comprueba el indice de correlacion R-Squared)
+
+#### Gráfico: Modelo 1
+
+```{r grafico analisis de regresion modelo 1}
+
+plot(gdp_model)
+
+```
+
+Como hemos observado, K=9 es el número óptimo ya que es aquel con el error cuadratico medio inferior
+
+### Modelo 1: Testing
+
+Hemos finalizado con el training de la informacion mediante el modelo que hemos aplicado y hemos analizados los indicares para este sub dataset en base al modelo. Ahora debemos proceder al analisis de la informacion que hemos excluido al inicio de este analisis, es decir, el subset de testing.
+
+```{r testing modelo 1}
+
+#Separo la variable a predecir del dataset de testeo
+test_features <- subset(testing_db1_sc, select = -`GDP Per Capita PPP`)
+test_target <- subset(testing_db1_sc, select = -`GDP Per Capita PPP`)[, 1]
+
+predictions <- predict(gdp_model, newdata = test_features)
+
+#Error cuadratico medio
+rsq <- sqrt(mean((test_target - predictions)^2))
+
+#Bondad de ajuste (coeficiente de correlacion)
+corr <- cor(test_target, predictions)^2
+
+cat("El coeficiente de correlación es", corr, "y el error cuadrático medio es", rsq)
+
+
+
+```
+
+El analisis es similar al anterior. La bondad de ajuste es de 0.55, lo que nos indica que solamente el 55% de la variacion del PBI Per Capita en el subset de testeo es explicada por el modelo. Detalladamente, podemos afirmar que las predicciones de el modelo tienen en promedio una diferencia de aproximadamente 0.6699051 unidades respecto a los valores reales de la informacion de testeo.
+
+### Modelo 2: K-Fold Cross-Validation - Training
+
+Existen otros métodos de para generar un modelo de regresión, en este caso utilizaremos el método K-Fold Cross-Validation; que genera una particion de K veces de de la informacion disponible para generar dicho modelo.
+
+```{r Modelo 2 K-Fold regression analisis training}
+
+#Genero las particiones de cross validation
+set.seed(1)
+k10 <- trainControl(
+  method = "cv",
+  number = 10
+)
+
+#Genero el modelo con las particiones
+set.seed(1)
+gdp_model2 <- train(
+  `GDP Per Capita PPP` ~ .,
+  data = training_db1_sc,
+  trControl = k10,
+  method = "knn"
+)
+
+gdp_model2
+
+```
+
+Utilizando este método podemos observar que todos los índices han mejorado. Se aprecia una muy buena mejora del índice de correlación, que pasa del 74,75% al 82,11%. La disperción ha disminuido un 3%, y la distancia vertical ha disminuido ligeramente un 0,5% Este modelo, se ajusta de mejor manera a los datos.
+
+#### Gráfico: Modelo 2
+
+```{r grafico K-Fold regresion training}
+
+plot(gdp_model2)
+
+```
+
+### Modelo 2:K-Fold Cross-Validation - Testing
+
+Pasamos ahora a testear nuestro modelo en base al modelo que hemos generado
+
+```{r K-Fold regresion testing }
+
+test_features2 <- subset(testing_db1_sc, select = -`GDP Per Capita PPP`)
+test_target2 <- subset(testing_db1_sc, select = -`GDP Per Capita PPP`)[, 1]
+
+predictions_model2 <- predict(gdp_model2, newdata = test_features)
+
+#Error cuadratico medio
+rmse <- sqrt(mean((test_target2 - predictions_model2)^2))
+
+#Bondad de ajuste (coeficiente de correlacion)
+r_squared <- cor(test_target2, predictions_model2)^2
+
+cat("El coeficiente de correlación es", r_squared, "y el error cuadrático medio es", rmse)
+
+
+```
+
+Lamentablemente, el nuevo modelo no se ajusta de la mejor manera al momento de predecir la data de testeo. El coeficiente de correlación ha disminuido un 2% y el error cuadratico medio a aumentado tambien otro 2%
+
+### Modelo 3: Training optimizacion de hiperparametros
+
+Es posible seguir optimizando los parametros del modelo utilizando el parametro tuneGrid
+
+```{r optimizacion hiperparametros modelo 3}
+
+#El modelo va a ser mediante cross validation, corriendo k vecinos desde 3 a 15, de a 1.
+set.seed(1)
+tuneGrid <- expand.grid(
+  k = seq(3, 15, by = 1)
+)
+
+#Genero las particiones de cross validation
+set.seed(1)
+k10 <- trainControl(
+  method = "cv",
+  number = 10
+)
+
+#Modelo
+set.seed(1)
+gdp_model3 <- train(
+  `GDP Per Capita PPP` ~ .,
+  data = training_db1_sc,
+  trControl = k10,
+  tuneGrid = tuneGrid,
+  method = "knn"
+)
+
+gdp_model3
+
+```
+
+En este nuevo modelo, el número de K vecinos optimo es de 11. El coeficiente de correlación es del 83.46% en nuestro tercer modelo, comparado al 82.11% del segundo modelo y el 74.75% del primer modelo. Se puede apreciar que este índice ha mejorado, al menos, en nuestra informacion de training. El error cuadratico medio es del 0.4907 en este tercer modelo, comparado al 0.5029 del segundo modelo y 0.5368 del primer modelo. Vemos que este aspecto tambien ha mejorado, la dispersión es menor. Por último, la distancia vertical promedio tambien ha aumentado; es del 0.3499 unidades respecto a 0.3416 y 0.3457 del segundo y primer modelo respectivamente.
+
+#### Gráfico: Modelo 3
+
+```{r grafico modelo 3}
+
+plot(gdp_model3)
+
+```
+
+### Modelo 3: Testing optimización de hiperparametros
+
+```{r prediccion modelo 3 }
+
+test_features3 <- subset(testing_db1_sc, select = -`GDP Per Capita PPP`)
+test_target3 <- subset(testing_db1_sc, select = -`GDP Per Capita PPP`)[, 1]
+
+predictions_model3 <- predict(gdp_model3, newdata = test_features)
+
+#Error cuadratico medio
+rmse2 <- sqrt(mean((test_target3 - predictions_model3)^2))
+
+#Bondad de ajuste (coeficiente de correlacion)
+r_squared2 <- cor(test_target3, predictions_model3)^2
+
+cat("El coeficiente de correlación es", r_squared2, "y el error cuadrático medio es", rmse2)
+
+```
+
+En nuestro analisis final, tercer modelo aplicado a la información de testeo nos arroja un índice de correlación del 55.50%, del 53.07 para el segundo modelo y 55.1% en el primer modelo. Hemos de notar que el tercer modelo es el mejor para predecir el PBI Per Capita; seguido por el primer modelo y luego el segundo. Finalmente, el modelo con menor dispersión es el primero (con 0.67), seguido por el tercer modelo (0.6742) y por último el segundo modelo (0.6919).
+
+Podemos afirmar, que el mejor modelo es el tercero, ya que es el modelo con mayor poder de predicción y además posee una dispersión similar a las del modelo 1 y 2.
+
+## CART
+
+CART, por sus siglas en inglés, Classification and Regression Tress son conocidos como arboles de decisión. Este método de analisis se caracteriza por la clasificacion de variables categoricas y la regresión que implica que la variable a predecir es continua. Las variables categoricas son aquellas que tienen una disposición ya sea binaria o de n numero de estados distintos. Es un algoritmo de aprendizaje automatico, y utiliza la tecnica de "random forests" o bosques aleatorios; genera arboles o "caminos" aleatorios y la prediccion se basa en el promedio de cada arbol. Puede utilizar datos faltantes (NA) Identifica las variables categoricas o de mayor importancia
+
+```{r CART}
+
+library(dplyr)
+library(tidymodels)
+library(rpart.plot)
+tidymodels_prefer()
+
+#Genero un vector que reordena aleatoriamente las observaciones
+random_index <- sample(1:nrow(countries_information))
+cart_countries_info <- countries_information[random_index, ]
+
+#Ordenamos el dataset
+cart_countries_info <- countries_information %>%
+  select( -HDI) %>%
+  rename( development = `Nivel de desarrollo`) %>%
+  drop_na()
+
+#Separo la data entre training y testing
+data_split <- initial_split(cart_countries_info)
+train_cart_db <- training(data_split)
+test_cart_db <- testing(data_split)
+
+#K-Cross validation 
+k_folds <- vfold_cv(train_cart_db)
+
+#Modelo
+tree_spec <- decision_tree(
+  mode = "classification",
+  engine = "rpart",
+  cost_complexity = tune(),
+  tree_depth = tune(),
+  min_n = tune()
+)
+
+#4 valores por cada hiperparametro
+tree_grid <- grid_regular(cost_complexity(), tree_depth(), min_n(), levels = 4)
+
+#Especificacion final del modelo
+
+set.seed(1)
+
+tree_rs <- tune_grid(
+  tree_spec,
+  development ~ .,
+  resamples = k_folds,
+  grid = tree_grid,
+  metrics = metric_set(accuracy, roc_auc, kap, precision, recall, yardstick::sensitivity)
+)
+
+#model_metrics <- collect_metrics(tree_rs)
+
+```
